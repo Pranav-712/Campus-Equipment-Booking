@@ -2,6 +2,12 @@
 pipeline {
     agent any
 
+    environment {
+        K8S_SERVER = 'https://192.168.58.2:8443'
+        K8S_CA = '/etc/jenkins/kubernetes/ca.crt'
+        K8S_NAMESPACE = 'default'
+    }
+
     stages {
         stage('Checkout') {
             steps {
@@ -24,34 +30,88 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t campus-equipment-booking:set-d .'
-            }
-        }
-
-        stage('Deploy Container') {
-            steps {
                 sh '''
-                    docker rm -f campus-equipment-booking-container || true
-                    docker run -d --name campus-equipment-booking-container \
-                        -p 8082:8080 campus-equipment-booking:set-d
+                    IMAGE="campus-equipment-booking:build-${BUILD_NUMBER}"
+                    docker build -t "$IMAGE" .
                 '''
             }
         }
 
-        stage('Verify Health') {
+        stage('Load Image into Minikube') {
             steps {
                 sh '''
-                    for i in $(seq 1 30); do
-                        if curl -fsS http://localhost:8082/actuator/health; then
-                            echo
-                            exit 0
-                        fi
-                        sleep 2
-                    done
-                    echo "Health check failed"
-                    docker logs campus-equipment-booking-container
-                    exit 1
+                    set -eu
+                    IMAGE="campus-equipment-booking:build-${BUILD_NUMBER}"
+
+                    docker save "$IMAGE" |
+                        docker exec -i minikube ctr -n k8s.io images import -
+
+                    docker exec minikube ctr -n k8s.io images ls |
+                        grep -F "$IMAGE"
                 '''
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                withCredentials([
+                    string(
+                        credentialsId: 'k8s-deployer-token',
+                        variable: 'K8S_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set -eu
+                        IMAGE="campus-equipment-booking:build-${BUILD_NUMBER}"
+
+                        kubectl \
+                            --server="$K8S_SERVER" \
+                            --certificate-authority="$K8S_CA" \
+                            --token="$K8S_TOKEN" \
+                            --namespace="$K8S_NAMESPACE" \
+                            set image \
+                            deployment/campus-equipment-booking \
+                            campus-equipment-booking="$IMAGE"
+
+                        kubectl \
+                            --server="$K8S_SERVER" \
+                            --certificate-authority="$K8S_CA" \
+                            --token="$K8S_TOKEN" \
+                            --namespace="$K8S_NAMESPACE" \
+                            rollout status \
+                            deployment/campus-equipment-booking \
+                            --timeout=180s
+                    '''
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                withCredentials([
+                    string(
+                        credentialsId: 'k8s-deployer-token',
+                        variable: 'K8S_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set -eu
+
+                        kubectl \
+                            --server="$K8S_SERVER" \
+                            --certificate-authority="$K8S_CA" \
+                            --token="$K8S_TOKEN" \
+                            --namespace="$K8S_NAMESPACE" \
+                            get deployment campus-equipment-booking
+
+                        kubectl \
+                            --server="$K8S_SERVER" \
+                            --certificate-authority="$K8S_CA" \
+                            --token="$K8S_TOKEN" \
+                            --namespace="$K8S_NAMESPACE" \
+                            get pods -l app=campus-equipment-booking
+                    '''
+                }
             }
         }
     }
