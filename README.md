@@ -1,7 +1,7 @@
 # Campus Equipment Booking Service
 Java 17 / Spring Boot REST API for a CI/CD lab assessment.
 
-## Build and test
+## Build and testsssss
 `mvn clean test`
 
 ## Run
