@@ -40,4 +40,11 @@ void negativeQuantityRejected() {
     assertEquals(10,
         service.getEquipment("LAPTOP01").getAvailableQuantity());
 }
+@Test
+void emptyBorrowerRejected() {
+    assertThrows(IllegalArgumentException.class,
+        () -> service.create("", "LAPTOP01", 1));
+
+    assertEquals(10, service.getEquipment("LAPTOP01").getAvailableQuantity());
+}
 }
